@@ -4,17 +4,18 @@ from datetime import datetime
 import requests
 from fer import FER
 import cv2
+from urllib.parse import quote
 
-# ---------------------- Initialize TTS Engine ----------------------
-engine = pyttsx3.init()
-engine.setProperty('rate', 150)
-engine.setProperty('volume', 1)
-
+# ---------------------- Speak Function ----------------------
 def speak(text):
-    """Speak the given text aloud."""
-    print(f"TTS: {text}")  # Debug print
+    """Speak the given text aloud and print it."""
+    print(f">> {text}")  # Console pe bhi dikhega
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 150)
+    engine.setProperty('volume', 1)
     engine.say(text)
     engine.runAndWait()
+    engine.stop()
 
 # ---------------------- Listen for Voice Command ----------------------
 def listen_command():
@@ -22,10 +23,10 @@ def listen_command():
     try:
         with sr.Microphone(device_index=None) as source:
             recognizer.adjust_for_ambient_noise(source, duration=1.5)
-            print("Listening for command...")
+            print("🎤 Listening for command...")
             audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
         command = recognizer.recognize_google(audio).lower()
-        print(f"Command received: {command}")
+        print(f"✅ Command received: {command}")
         return command
     except sr.UnknownValueError:
         speak("Sorry, I could not understand you.")
@@ -44,12 +45,9 @@ def speak_date_time():
     speak(f"Today is {current_date} and the time is {current_time}")
 
 # ---------------------- Weather ----------------------
-import requests
-from urllib.parse import quote
-
 def speak_weather(city, api_key):
     try:
-        city_encoded = quote(city)  # Convert spaces to %20
+        city_encoded = quote(city)
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={api_key}&units=metric"
         response = requests.get(url).json()
         
@@ -58,12 +56,10 @@ def speak_weather(city, api_key):
             description = response['weather'][0]['description']
             speak(f"The temperature in {city.title()} is {temp} degrees Celsius with {description}")
         else:
-            print(f"API Response: {response}")  # Debug the exact API response
             speak(f"Sorry, I couldn't fetch weather for {city.title()}")
     except Exception as e:
         print(f"Weather Error: {e}")
         speak("Weather service is not available right now.")
-
 
 # ---------------------- News ----------------------
 def speak_news(api_key, country='us'):
@@ -74,7 +70,9 @@ def speak_news(api_key, country='us'):
         if articles:
             speak("Here are the top 3 news headlines.")
             for i, article in enumerate(articles[:3], start=1):
-                speak(f"Headline {i}: {article['title']}")
+                headline = article['title']
+                text = f"Headline {i}: {headline}"
+                speak(text[:200])  # Avoid long text overflow
         else:
             speak("No news available at the moment.")
     except Exception as e:
@@ -97,7 +95,6 @@ def speak_mood():
             result = detector.top_emotion(frame)
             if result:
                 emotion, score = result
-                # Map emotions to emojis
                 emotion_emojis = {
                     "happy": "😊",
                     "sad": "😢",
@@ -108,10 +105,8 @@ def speak_mood():
                     "neutral": "😐"
                 }
                 emoji = emotion_emojis.get(emotion, "")
-                
-                # Speak the mood and show emoji
                 speak(f"I think you are feeling {emotion} right now.")
-                print(f"Detected mood: {emotion} {emoji}")  # Console output for visual
+                print(f"Detected mood: {emotion} {emoji}")
             else:
                 speak("I could not detect your mood.")
         else:
@@ -119,11 +114,9 @@ def speak_mood():
 
         cap.release()
         cv2.destroyAllWindows()
-
     except Exception as e:
         print(f"Mood Detection Error: {e}")
         speak("Mood detection is currently unavailable.")
-
 
 # ---------------------- Main Interactive Loop ----------------------
 if __name__ == "__main__":
@@ -132,34 +125,28 @@ if __name__ == "__main__":
     DEFAULT_CITY = "Kanpur"
     DEFAULT_COUNTRY = "us"
 
-    speak("Hello! I am your smart mirror. How Can I help you.")
+    speak("Hello! I am your smart mirror. How can I help you.")
 
     while True:
         command = listen_command()
         if not command:
-            continue  # Nothing recognized, continue listening
+            continue
 
-        # ------------------ Time / Date ------------------
         if "time" in command or "date" in command:
             speak_date_time()
 
-        # ------------------ Weather ------------------
         elif "weather" in command:
             city_name = DEFAULT_CITY
-            # Look for "in <city>" or "of <city>"
             if "in " in command:
                 city_name = command.split("in ")[1].strip()
             elif "of " in command:
                 city_name = command.split("of ")[1].strip()
             speak_weather(city_name, WEATHER_API_KEY)
 
-        # ------------------ News ------------------
         elif "news" in command:
             country_code = DEFAULT_COUNTRY
-            # Look for "from <country>"
             if "from " in command:
                 country_name = command.split("from ")[1].strip().lower()
-                # Map country names to ISO 3166 country codes
                 country_map = {
                     "india": "in",
                     "us": "us",
@@ -168,20 +155,16 @@ if __name__ == "__main__":
                     "united kingdom": "gb",
                     "canada": "ca",
                     "australia": "au"
-                    # Add more as needed
                 }
                 country_code = country_map.get(country_name, DEFAULT_COUNTRY)
             speak_news(NEWS_API_KEY, country_code)
 
-        # ------------------ Mood ------------------
         elif "mood" in command or "feeling" in command:
             speak_mood()
 
-        # ------------------ Exit ------------------
         elif "exit" in command or "stop" in command:
             speak("Goodbye! Have a nice day.")
             break
 
-        # ------------------ Unrecognized ------------------
         else:
             speak("Sorry, I can't perform that command.")
