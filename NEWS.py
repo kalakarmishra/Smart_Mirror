@@ -1,6 +1,6 @@
 import requests
 
-NEWS_API_KEY = "73cae16a679b4df090ef1c6e918c4989"
+NEWS_API_KEY ="73cae16a679b4df090ef1c6e918c4989"
 #url = f"https://newsapi.org/v2/top-headlines?country=in&apiKey={NEWS_API_KEY}"
 url = f"https://newsapi.org/v2/top-headlines?country=us&apiKey={NEWS_API_KEY}"
 

@@ -5,44 +5,211 @@ import requests
 from fer import FER
 import cv2
 from urllib.parse import quote
+import time
+import random
+import threading
+import pygame
+import os
+import vlc
+import yt_dlp
+import google.generativeai as genai
 
-# ---------------------- Speak Function ----------------------
+# ---------------------- VLC Path Fix ----------------------
+os.add_dll_directory(r"C:\Program Files\VideoLAN\VLC")
+
+# ---------------------- Initialize TTS Engine ----------------------
+# ---------------------- Initialize TTS Engine with Voice Control ----------------------
+engine = pyttsx3.init()
+voices = engine.getProperty('voices')
+
+# Try to set default voice to female
+female_voice = next((v for v in voices if "female" in v.name.lower()), None)
+if female_voice:
+    engine.setProperty('voice', female_voice.id)
+else:
+    engine.setProperty('voice', voices[1].id if len(voices) > 1 else voices[0].id)
+
+engine.setProperty('rate', 150)
+engine.setProperty('volume', 1)
+
+current_voice = "female"
+
+def change_voice(gender):
+    global current_voice
+    voices = engine.getProperty('voices')
+    target_voice = None
+    for v in voices:
+        if gender.lower() in v.name.lower():
+            target_voice = v
+            break
+    if target_voice:
+        engine.setProperty('voice', target_voice.id)
+        current_voice = gender.lower()
+        speak(f"Voice changed to {gender}.")
+    else:
+        speak(f"Sorry, I couldn't find a {gender} voice on this system.")
+
 def speak(text):
-    """Speak the given text aloud and print it."""
-    print(f">> {text}")  # Console pe bhi dikhega
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 150)
-    engine.setProperty('volume', 1)
+    print(f">> {text}")
     engine.say(text)
     engine.runAndWait()
-    engine.stop()
 
-# ---------------------- Listen for Voice Command ----------------------
-def listen_command():
+
+# ---------------------- Google Gemini Setup ----------------------
+GEMINI_API_KEY = "AIzaSyDsWMZWlGjkXhBY4_OLh1WDW_w7soTYKoA"  # Replace with your key
+genai.configure(api_key=GEMINI_API_KEY)
+
+def ask_google(query):
+    """Improved Gemini AI Assistant with fallback model detection."""
+    try:
+        preferred_models = [
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash"
+        ]
+
+        for model_name in preferred_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(query)
+                if response and hasattr(response, 'text'):
+                    speak(response.text)
+                    return
+            except Exception as e:
+                print(f">> Model {model_name} failed: {e}")
+
+        # If all models fail, auto-detect available models
+        print(">> Fetching available Gemini models...")
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                model = genai.GenerativeModel(m.name)
+                response = model.generate_content(query)
+                if response and hasattr(response, 'text'):
+                    speak(response.text)
+                    return
+
+        speak("Sorry, I couldn't connect to Google right now.")
+    except Exception as e:
+        print(f">> Google Assistant Error: {e}")
+        speak("Sorry, I couldn't connect to Google at the moment.")
+
+# ---------------------- Initialize Music ----------------------
+pygame.mixer.init()
+vlc_instance = vlc.Instance()
+vlc_player = None
+
+# ---------------------- MP3 Music ----------------------
+def play_mp3_music():
+    try:
+        mp3_files = [f for f in os.listdir(os.getcwd()) if f.lower().endswith(".mp3")]
+        if not mp3_files:
+            speak("No music files found in the folder.")
+            return
+        music_file = mp3_files[0]
+        pygame.mixer.music.load(music_file)
+        pygame.mixer.music.play()
+        speak(f"Playing {music_file} now.")
+    except Exception as e:
+        speak(f"Cannot play music: {e}")
+
+# ---------------------- YouTube Music ----------------------
+def play_youtube_music(song_name):
+    global vlc_player
+    try:
+        speak(f"Searching YouTube for {song_name}")
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'noplaylist': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{song_name}", download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            audio_url = info['url']
+            title = info.get("title", "this track")
+
+        vlc_player = vlc_instance.media_player_new()
+        media = vlc_instance.media_new(audio_url)
+        vlc_player.set_media(media)
+        vlc_player.audio_set_volume(50)
+        vlc_player.play()
+        speak(f"Now playing {title} from YouTube.")
+    except Exception as e:
+        speak(f"Could not play YouTube music: {e}")
+
+# ---------------------- YouTube Music Control ----------------------
+def pause_youtube_music():
+    if vlc_player:
+        vlc_player.pause()
+        speak("Music paused.")
+
+def resume_youtube_music():
+    if vlc_player:
+        vlc_player.play()
+        speak("Music resumed.")
+
+def stop_youtube_music():
+    global vlc_player
+    if vlc_player:
+        vlc_player.stop()
+        speak("Music stopped.")
+        vlc_player = None
+
+def increase_volume(step=20):
+    if vlc_player:
+        current = vlc_player.audio_get_volume()
+        new_vol = min(100, current + step)
+        vlc_player.audio_set_volume(new_vol)
+        speak(f"Volume increased to {new_vol} percent.")
+
+def decrease_volume(step=20):
+    if vlc_player:
+        current = vlc_player.audio_get_volume()
+        new_vol = max(0, current - step)
+        vlc_player.audio_set_volume(new_vol)
+        speak(f"Volume decreased to {new_vol} percent.")
+
+# ---------------------- Dynamic Joke ----------------------
+def tell_joke():
+    try:
+        response = requests.get("https://v2.jokeapi.dev/joke/Any?blacklistFlags=nsfw,religious,political,racist,sexist,explicit")
+        data = response.json()
+        if data['type'] == 'single':
+            speak(data['joke'])
+        elif data['type'] == 'twopart':
+            speak(data['setup'])
+            time.sleep(2)
+            speak(data['delivery'])
+    except Exception as e:
+        print(f"Joke API Error: {e}")
+        speak("Sorry, I cannot fetch a joke right now.")
+
+# ---------------------- Voice Command Listener ----------------------
+def listen_command(duration=5):
     recognizer = sr.Recognizer()
     try:
-        with sr.Microphone(device_index=None) as source:
+        with sr.Microphone() as source:
             recognizer.adjust_for_ambient_noise(source, duration=1.5)
-            print("🎤 Listening for command...")
-            audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
+            print("🎤 Listening...")
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=duration)
         command = recognizer.recognize_google(audio).lower()
         print(f"✅ Command received: {command}")
         return command
     except sr.UnknownValueError:
-        speak("Sorry, I could not understand you.")
         return ""
     except sr.RequestError:
         speak("Speech service is not available.")
         return ""
-    except sr.WaitTimeoutError:
+    except Exception as e:
+        print(f"Recording error: {e}")
         return ""
 
 # ---------------------- Date & Time ----------------------
 def speak_date_time():
     now = datetime.now()
-    current_time = now.strftime("%H:%M:%S")
-    current_date = now.strftime("%A, %d %B %Y")
-    speak(f"Today is {current_date} and the time is {current_time}")
+    speak(f"Today is {now.strftime('%A, %d %B %Y')} and the time is {now.strftime('%H:%M:%S')}")
 
 # ---------------------- Weather ----------------------
 def speak_weather(city, api_key):
@@ -50,121 +217,97 @@ def speak_weather(city, api_key):
         city_encoded = quote(city)
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={api_key}&units=metric"
         response = requests.get(url).json()
-        
         if response.get("main"):
             temp = response['main']['temp']
             description = response['weather'][0]['description']
-            speak(f"The temperature in {city.title()} is {temp} degrees Celsius with {description}")
+            speak(f"The temperature in {city.title()} is {temp}°C with {description}")
         else:
             speak(f"Sorry, I couldn't fetch weather for {city.title()}")
     except Exception as e:
         print(f"Weather Error: {e}")
         speak("Weather service is not available right now.")
 
-# ---------------------- News ----------------------
-def speak_news(api_key, country='us'):
-    try:
-        url = f"https://newsapi.org/v2/top-headlines?country={country}&apiKey={api_key}"
-        response = requests.get(url).json()
-        articles = response.get('articles')
-        if articles:
-            speak("Here are the top 3 news headlines.")
-            for i, article in enumerate(articles[:3], start=1):
-                headline = article['title']
-                text = f"Headline {i}: {headline}"
-                speak(text[:200])  # Avoid long text overflow
-        else:
-            speak("No news available at the moment.")
-    except Exception as e:
-        print(f"News Error: {e}")
-        speak("News service is not available right now.")
-
-# ---------------------- Mood Detection ----------------------
-def speak_mood():
-    try:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            speak("Cannot access the camera.")
-            return
-
-        detector = FER(mtcnn=True)
-        speak("Please look at the camera for mood detection.")
-        ret, frame = cap.read()
-
-        if ret:
-            result = detector.top_emotion(frame)
-            if result:
-                emotion, score = result
-                emotion_emojis = {
-                    "happy": "😊",
-                    "sad": "😢",
-                    "angry": "😠",
-                    "surprise": "😮",
-                    "fear": "😨",
-                    "disgust": "🤢",
-                    "neutral": "😐"
-                }
-                emoji = emotion_emojis.get(emotion, "")
-                speak(f"I think you are feeling {emotion} right now.")
-                print(f"Detected mood: {emotion} {emoji}")
-            else:
-                speak("I could not detect your mood.")
-        else:
-            speak("Failed to capture image from camera.")
-
-        cap.release()
-        cv2.destroyAllWindows()
-    except Exception as e:
-        print(f"Mood Detection Error: {e}")
-        speak("Mood detection is currently unavailable.")
-
-# ---------------------- Main Interactive Loop ----------------------
+# ---------------------- Main Loop ----------------------
 if __name__ == "__main__":
     WEATHER_API_KEY = "eeddbf651f3dc07b4bea92e116270823"
-    NEWS_API_KEY = "73cae16a679b4df090ef1c6e918c4989"
-    DEFAULT_CITY = "Kanpur"
-    DEFAULT_COUNTRY = "us"
 
-    speak("Hello! I am your smart mirror. How can I help you.")
+    speak("Good evening Aman! My name is lush.")
+    active = False
 
     while True:
+        if not active:
+            command = listen_command(duration=3)
+            if "hello lush" in command:
+                speak("Hello! What can I do for you?")
+                active = True
+            else:
+                continue
+
         command = listen_command()
         if not command:
+            time.sleep(1)
             continue
 
+        # ---------------------- Commands ----------------------
         if "time" in command or "date" in command:
             speak_date_time()
 
         elif "weather" in command:
-            city_name = DEFAULT_CITY
-            if "in " in command:
-                city_name = command.split("in ")[1].strip()
-            elif "of " in command:
-                city_name = command.split("of ")[1].strip()
-            speak_weather(city_name, WEATHER_API_KEY)
+            speak("Which city do you want the weather for?")
+            city = listen_command()
+            if city:
+                speak_weather(city, WEATHER_API_KEY)
+            else:
+                speak("I didn’t catch the city name.")
 
-        elif "news" in command:
-            country_code = DEFAULT_COUNTRY
-            if "from " in command:
-                country_name = command.split("from ")[1].strip().lower()
-                country_map = {
-                    "india": "in",
-                    "us": "us",
-                    "united states": "us",
-                    "uk": "gb",
-                    "united kingdom": "gb",
-                    "canada": "ca",
-                    "australia": "au"
-                }
-                country_code = country_map.get(country_name, DEFAULT_COUNTRY)
-            speak_news(NEWS_API_KEY, country_code)
+        elif "joke" in command:
+            tell_joke()
 
-        elif "mood" in command or "feeling" in command:
-            speak_mood()
+        elif "youtube" in command and "music" in command:
+            song_name = command.replace("play youtube", "").replace("music", "").strip()
+            if song_name:
+                play_youtube_music(song_name)
+            else:
+                speak("Please say the name of the song after saying play youtube music.")
 
-        elif "exit" in command or "stop" in command:
+        elif "pause music" in command:
+            pause_youtube_music()
+
+        elif "resume music" in command:
+            resume_youtube_music()
+
+        elif "stop music" in command:
+            stop_youtube_music()
+
+        elif "increase volume" in command:
+            increase_volume()
+
+        elif "decrease volume" in command:
+            decrease_volume()
+
+        elif "change voice to female" in command:
+            if set_voice("female"):
+                speak("Voice changed to female.")
+            else:
+                speak("Sorry, I couldn’t find a female voice.")
+
+        elif "change voice to male" in command:
+            if set_voice("male"):
+                speak("Voice changed to male.")
+            else:
+                speak("Sorry, I couldn’t find a male voice.")
+
+        elif "google" in command or "ask google" in command:
+            query = command.replace("ask google", "").replace("google", "").strip()
+            if query:
+                ask_google(query)
+            else:
+                speak("What do you want me to ask Google?")
+
+        elif "stop" in command or "exit" in command:
             speak("Goodbye! Have a nice day.")
+            stop_youtube_music()
             break
 
         else:
-            speak("Sorry, I can't perform that command.")
+            speak("I can help you with time, weather, music, jokes, or you can ask Google for more.")
