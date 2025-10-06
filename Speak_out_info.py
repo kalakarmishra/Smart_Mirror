@@ -13,12 +13,12 @@ import os
 import vlc
 import yt_dlp
 import google.generativeai as genai
+from building_data import building_info   # ✅ NEW IMPORT for FET location data
 
 # ---------------------- VLC Path Fix ----------------------
 os.add_dll_directory(r"C:\Program Files\VideoLAN\VLC")
 
 # ---------------------- Initialize TTS Engine ----------------------
-# ---------------------- Initialize TTS Engine with Voice Control ----------------------
 engine = pyttsx3.init()
 voices = engine.getProperty('voices')
 
@@ -34,6 +34,11 @@ engine.setProperty('volume', 1)
 
 current_voice = "female"
 
+def speak(text):
+    print(f">> {text}")
+    engine.say(text)
+    engine.runAndWait()
+
 def change_voice(gender):
     global current_voice
     voices = engine.getProperty('voices')
@@ -48,12 +53,6 @@ def change_voice(gender):
         speak(f"Voice changed to {gender}.")
     else:
         speak(f"Sorry, I couldn't find a {gender} voice on this system.")
-
-def speak(text):
-    print(f">> {text}")
-    engine.say(text)
-    engine.runAndWait()
-
 
 # ---------------------- Google Gemini Setup ----------------------
 GEMINI_API_KEY = "AIzaSyDsWMZWlGjkXhBY4_OLh1WDW_w7soTYKoA"  # Replace with your key
@@ -79,7 +78,6 @@ def ask_google(query):
             except Exception as e:
                 print(f">> Model {model_name} failed: {e}")
 
-        # If all models fail, auto-detect available models
         print(">> Fetching available Gemini models...")
         for m in genai.list_models():
             if "generateContent" in m.supported_generation_methods:
@@ -99,7 +97,6 @@ pygame.mixer.init()
 vlc_instance = vlc.Instance()
 vlc_player = None
 
-# ---------------------- MP3 Music ----------------------
 def play_mp3_music():
     try:
         mp3_files = [f for f in os.listdir(os.getcwd()) if f.lower().endswith(".mp3")]
@@ -113,7 +110,6 @@ def play_mp3_music():
     except Exception as e:
         speak(f"Cannot play music: {e}")
 
-# ---------------------- YouTube Music ----------------------
 def play_youtube_music(song_name):
     global vlc_player
     try:
@@ -139,7 +135,6 @@ def play_youtube_music(song_name):
     except Exception as e:
         speak(f"Could not play YouTube music: {e}")
 
-# ---------------------- YouTube Music Control ----------------------
 def pause_youtube_music():
     if vlc_player:
         vlc_player.pause()
@@ -186,6 +181,20 @@ def tell_joke():
         print(f"Joke API Error: {e}")
         speak("Sorry, I cannot fetch a joke right now.")
 
+# ---------------------- NEW: FET Building Navigator ----------------------
+def get_location_info(query):
+    """Search FET building data for a matching place name."""
+    query = query.lower()
+    for name, info in building_info.items():
+        if name in query:
+            floor = info.get("floor", "unknown")
+            room = info.get("room", "unknown")
+            if room:
+                return f"{name.title()} is located at {floor}, room number {room}."
+            else:
+                return f"{name.title()} is located at {floor}."
+    return "Sorry, I couldn’t find that location in the FET building."
+
 # ---------------------- Voice Command Listener ----------------------
 def listen_command(duration=5):
     recognizer = sr.Recognizer()
@@ -205,11 +214,6 @@ def listen_command(duration=5):
     except Exception as e:
         print(f"Recording error: {e}")
         return ""
-
-# ---------------------- Date & Time ----------------------
-def speak_date_time():
-    now = datetime.now()
-    speak(f"Today is {now.strftime('%A, %d %B %Y')} and the time is {now.strftime('%H:%M:%S')}")
 
 # ---------------------- Weather ----------------------
 def speak_weather(city, api_key):
@@ -231,14 +235,36 @@ def speak_weather(city, api_key):
 if __name__ == "__main__":
     WEATHER_API_KEY = "eeddbf651f3dc07b4bea92e116270823"
 
-    speak("Good evening Aman! My name is lush.")
+    now = datetime.now()
+    hour = now.hour
+    day = now.strftime('%A')
+
+    if 5 <= hour < 12:
+        greeting = "Good morning"
+    elif 12 <= hour < 17:
+        greeting = "Good afternoon"
+    elif 17 <= hour < 21:
+        greeting = "Good evening"
+    else:
+        greeting = "Good night"
+
+    print(f">> {greeting} Aman! My name is Lush.")
+    engine.say(f"{greeting} Aman! My name is Lush.")
+    engine.runAndWait()
+
+    if day in ["Saturday", "Sunday"]:
+        engine.say(f"It's {day}, hope you're enjoying your weekend.")
+        engine.runAndWait()
+
+    time.sleep(1)
+
     active = False
 
     while True:
         if not active:
             command = listen_command(duration=3)
             if "hello lush" in command:
-                speak("Hello! What can I do for you?")
+                speak("Hello Aman! What can I do for you?")
                 active = True
             else:
                 continue
@@ -248,9 +274,10 @@ if __name__ == "__main__":
             time.sleep(1)
             continue
 
-        # ---------------------- Commands ----------------------
+        # ---------- Commands ----------
         if "time" in command or "date" in command:
-            speak_date_time()
+            now = datetime.now()
+            speak(f"Today is {now.strftime('%A, %d %B %Y')} and time is {now.strftime('%I:%M %p')}")
 
         elif "weather" in command:
             speak("Which city do you want the weather for?")
@@ -264,11 +291,11 @@ if __name__ == "__main__":
             tell_joke()
 
         elif "youtube" in command and "music" in command:
-            song_name = command.replace("play youtube", "").replace("music", "").strip()
-            if song_name:
-                play_youtube_music(song_name)
+            song = command.replace("play youtube", "").replace("music", "").strip()
+            if song:
+                play_youtube_music(song)
             else:
-                speak("Please say the name of the song after saying play youtube music.")
+                speak("Please tell me the name of the song.")
 
         elif "pause music" in command:
             pause_youtube_music()
@@ -286,16 +313,15 @@ if __name__ == "__main__":
             decrease_volume()
 
         elif "change voice to female" in command:
-            if set_voice("female"):
-                speak("Voice changed to female.")
-            else:
-                speak("Sorry, I couldn’t find a female voice.")
+            change_voice("female")
 
         elif "change voice to male" in command:
-            if set_voice("male"):
-                speak("Voice changed to male.")
-            else:
-                speak("Sorry, I couldn’t find a male voice.")
+            change_voice("male")
+
+        # ✅ NEW FEATURE: FET Building Queries
+        elif "where" in command or "location" in command:
+            response = get_location_info(command)
+            speak(response)
 
         elif "google" in command or "ask google" in command:
             query = command.replace("ask google", "").replace("google", "").strip()
@@ -305,7 +331,7 @@ if __name__ == "__main__":
                 speak("What do you want me to ask Google?")
 
         elif "stop" in command or "exit" in command:
-            speak("Goodbye! Have a nice day.")
+            speak("Goodbye Aman! Have a great day.")
             stop_youtube_music()
             break
 
