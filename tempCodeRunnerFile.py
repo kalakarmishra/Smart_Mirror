@@ -1,194 +1,313 @@
-# mirror_ui.py
-import tkinter as tk
+import pyttsx3
+import speech_recognition as sr
 from datetime import datetime
-import threading
 import requests
+from fer import FER
+import cv2
+from urllib.parse import quote
 import time
-import queue
+import random
+import threading
+import pygame
+import os
+import vlc
+import yt_dlp
+import google.generativeai as genai
 
-# --------------- CONFIG ----------------
-CITY = "Delhi"   # change if you want
-API_KEY = "eeddbf651f3dc07b4bea92e116270823"
+# ---------------------- VLC Path Fix ----------------------
+os.add_dll_directory(r"C:\Program Files\VideoLAN\VLC")
 
-# Thread-safe queue for incoming messages from assistant thread
-_msg_queue = queue.Queue()
-_root = None
-_chat_canvas = None
-_chat_inner = None
-_time_label = None
-_date_label = None
-_weather_label = None
-_stop_event = threading.Event()
+# ---------------------- Initialize TTS Engine ----------------------
+# ---------------------- Initialize TTS Engine with Voice Control ----------------------
+engine = pyttsx3.init()
+voices = engine.getProperty('voices')
 
-# ----------------- UI BUILD -----------------
-def _build_ui():
-    global _root, _chat_canvas, _chat_inner, _time_label, _date_label, _weather_label
+# Try to set default voice to female
+female_voice = next((v for v in voices if "female" in v.name.lower()), None)
+if female_voice:
+    engine.setProperty('voice', female_voice.id)
+else:
+    engine.setProperty('voice', voices[1].id if len(voices) > 1 else voices[0].id)
 
-    root = tk.Tk()
-    _root = root
-    root.title("Smart Mirror")
-    root.configure(bg="black")
-    root.attributes("-fullscreen", True)
-    root.bind("<Escape>", lambda e: _on_escape())
+engine.setProperty('rate', 150)
+engine.setProperty('volume', 1)
 
-    # Top - Time & Date
-    _time_label = tk.Label(root, text="", font=("Helvetica", 56, "bold"), fg="white", bg="black")
-    _time_label.pack(pady=(30, 0))
-    _date_label = tk.Label(root, text="", font=("Helvetica", 20), fg="lightgray", bg="black")
-    _date_label.pack()
+current_voice = "female"
 
-    # Weather
-    _weather_label = tk.Label(root, text="", font=("Helvetica", 20), fg="lightblue", bg="black")
-    _weather_label.pack(pady=(10, 20))
-
-    # Chat frame
-    chat_frame = tk.Frame(root, bg="black")
-    chat_frame.pack(fill="both", expand=True, padx=20, pady=(10, 40))
-
-    _chat_canvas = tk.Canvas(chat_frame, bg="black", highlightthickness=0)
-    scrollbar = tk.Scrollbar(chat_frame, orient="vertical", command=_chat_canvas.yview)
-    _chat_inner = tk.Frame(_chat_canvas, bg="black")
-
-    _chat_inner.bind(
-        "<Configure>",
-        lambda e: _chat_canvas.configure(scrollregion=_chat_canvas.bbox("all"))
-    )
-    _chat_canvas.create_window((0, 0), window=_chat_inner, anchor="nw")
-    _chat_canvas.configure(yscrollcommand=scrollbar.set)
-
-    _chat_canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    # initial greeting
-    show_text_on_mirror("Hello Aman! I am your Smart Mirror Assistant 😊", sender="assistant")
-
-    # start updater loops
-    _root.after(100, _process_queue)
-    _root.after(0, _update_time_weather_loop)
-
-    return root
-
-# ----------------- STOP/ESC -----------------
-def _on_escape():
-    # signal stop and quit UI
-    _stop_event.set()
-    if _root:
-        _root.quit()
-
-# ----------------- WEATHER FETCH -----------------
-def _get_weather():
-    try:
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={API_KEY}&units=metric"
-        data = requests.get(url, timeout=6).json()
-        if data.get("main"):
-            temp = data['main']['temp']
-            desc = data['weather'][0]['description'].title()
-            return f"{CITY}: {temp}°C, {desc}"
-    except Exception:
-        pass
-    return "Weather unavailable"
-
-# ----------------- TIME & WEATHER LOOP -----------------
-def _update_time_weather_loop():
-    try:
-        if _stop_event.is_set():
-            return
-        now = datetime.now()
-        if _time_label:
-            _time_label.config(text=now.strftime("%I:%M:%S %p"))
-        if _date_label:
-            _date_label.config(text=now.strftime("%A, %d %B %Y"))
-        # update weather every 60 seconds (non-blocking: use a separate thread)
-        if _weather_label:
-            # spawn a background thread to fetch weather once
-            threading.Thread(target=_fetch_and_set_weather, daemon=True).start()
-    except Exception:
-        pass
-    # schedule again in 1 second for live time
-    if _root:
-        _root.after(1000, _update_time_weather_loop)
-
-def _fetch_and_set_weather():
-    txt = _get_weather()
-    try:
-        if _weather_label:
-            _weather_label.config(text=txt)
-    except Exception:
-        pass
-
-# ----------------- MESSAGE PROCESSOR -----------------
-def _process_queue():
-    """Process incoming messages placed into _msg_queue by assistant thread."""
-    try:
-        while not _msg_queue.empty():
-            msg, sender = _msg_queue.get_nowait()
-            _append_chat(msg, sender)
-    except Exception:
-        pass
-    if _root and not _stop_event.is_set():
-        _root.after(100, _process_queue)
-
-def _append_chat(text, sender="assistant"):
-    """Create a label in chat_inner showing text."""
-    if not _chat_inner:
-        return
-    if sender == "user":
-        lbl = tk.Label(
-            _chat_inner,
-            text=f"You: {text}",
-            font=("Helvetica", 20),
-            fg="white",
-            bg="#202020",
-            anchor="e",
-            justify="right",
-            wraplength=900,
-            padx=12,
-            pady=8
-        )
-        lbl.pack(anchor="e", pady=6, padx=8)
+def change_voice(gender):
+    global current_voice
+    voices = engine.getProperty('voices')
+    target_voice = None
+    for v in voices:
+        if gender.lower() in v.name.lower():
+            target_voice = v
+            break
+    if target_voice:
+        engine.setProperty('voice', target_voice.id)
+        current_voice = gender.lower()
+        speak(f"Voice changed to {gender}.")
     else:
-        lbl = tk.Label(
-            _chat_inner,
-            text=f"Lush: {text}",
-            font=("Helvetica", 20),
-            fg="#00ffcc",
-            bg="#000000",
-            anchor="w",
-            justify="left",
-            wraplength=900,
-            padx=12,
-            pady=8
-        )
-        lbl.pack(anchor="w", pady=6, padx=8)
+        speak(f"Sorry, I couldn't find a {gender} voice on this system.")
 
-    # autoscroll to bottom
-    try:
-        _chat_canvas.update_idletasks()
-        _chat_canvas.yview_moveto(1.0)
-    except Exception:
-        pass
+def speak(text):
+    print(f">> {text}")
+    engine.say(text)
+    engine.runAndWait()
 
-# --------------- PUBLIC API ------------------
-def show_text_on_mirror(text, sender="assistant"):
-    """
-    Thread-safe function to show text on mirror.
-    Call this from any thread.
-    sender: "assistant" or "user"
-    """
-    try:
-        _msg_queue.put((str(text), sender))
-    except Exception:
-        pass
 
-def start_ui():
-    """
-    Build and start the Tkinter UI. Should be called in the main thread.
-    This call blocks until the UI closes.
-    """
-    root = _build_ui()
+# ---------------------- Google Gemini Setup ----------------------
+GEMINI_API_KEY = "AIzaSyDsWMZWlGjkXhBY4_OLh1WDW_w7soTYKoA"  # Replace with your key
+genai.configure(api_key=GEMINI_API_KEY)
+
+def ask_google(query):
+    """Improved Gemini AI Assistant with fallback model detection."""
     try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        _stop_event.set()
+        preferred_models = [
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash"
+        ]
+
+        for model_name in preferred_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(query)
+                if response and hasattr(response, 'text'):
+                    speak(response.text)
+                    return
+            except Exception as e:
+                print(f">> Model {model_name} failed: {e}")
+
+        # If all models fail, auto-detect available models
+        print(">> Fetching available Gemini models...")
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                model = genai.GenerativeModel(m.name)
+                response = model.generate_content(query)
+                if response and hasattr(response, 'text'):
+                    speak(response.text)
+                    return
+
+        speak("Sorry, I couldn't connect to Google right now.")
+    except Exception as e:
+        print(f">> Google Assistant Error: {e}")
+        speak("Sorry, I couldn't connect to Google at the moment.")
+
+# ---------------------- Initialize Music ----------------------
+pygame.mixer.init()
+vlc_instance = vlc.Instance()
+vlc_player = None
+
+# ---------------------- MP3 Music ----------------------
+def play_mp3_music():
+    try:
+        mp3_files = [f for f in os.listdir(os.getcwd()) if f.lower().endswith(".mp3")]
+        if not mp3_files:
+            speak("No music files found in the folder.")
+            return
+        music_file = mp3_files[0]
+        pygame.mixer.music.load(music_file)
+        pygame.mixer.music.play()
+        speak(f"Playing {music_file} now.")
+    except Exception as e:
+        speak(f"Cannot play music: {e}")
+
+# ---------------------- YouTube Music ----------------------
+def play_youtube_music(song_name):
+    global vlc_player
+    try:
+        speak(f"Searching YouTube for {song_name}")
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'noplaylist': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{song_name}", download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            audio_url = info['url']
+            title = info.get("title", "this track")
+
+        vlc_player = vlc_instance.media_player_new()
+        media = vlc_instance.media_new(audio_url)
+        vlc_player.set_media(media)
+        vlc_player.audio_set_volume(50)
+        vlc_player.play()
+        speak(f"Now playing {title} from YouTube.")
+    except Exception as e:
+        speak(f"Could not play YouTube music: {e}")
+
+# ---------------------- YouTube Music Control ----------------------
+def pause_youtube_music():
+    if vlc_player:
+        vlc_player.pause()
+        speak("Music paused.")
+
+def resume_youtube_music():
+    if vlc_player:
+        vlc_player.play()
+        speak("Music resumed.")
+
+def stop_youtube_music():
+    global vlc_player
+    if vlc_player:
+        vlc_player.stop()
+        speak("Music stopped.")
+        vlc_player = None
+
+def increase_volume(step=20):
+    if vlc_player:
+        current = vlc_player.audio_get_volume()
+        new_vol = min(100, current + step)
+        vlc_player.audio_set_volume(new_vol)
+        speak(f"Volume increased to {new_vol} percent.")
+
+def decrease_volume(step=20):
+    if vlc_player:
+        current = vlc_player.audio_get_volume()
+        new_vol = max(0, current - step)
+        vlc_player.audio_set_volume(new_vol)
+        speak(f"Volume decreased to {new_vol} percent.")
+
+# ---------------------- Dynamic Joke ----------------------
+def tell_joke():
+    try:
+        response = requests.get("https://v2.jokeapi.dev/joke/Any?blacklistFlags=nsfw,religious,political,racist,sexist,explicit")
+        data = response.json()
+        if data['type'] == 'single':
+            speak(data['joke'])
+        elif data['type'] == 'twopart':
+            speak(data['setup'])
+            time.sleep(2)
+            speak(data['delivery'])
+    except Exception as e:
+        print(f"Joke API Error: {e}")
+        speak("Sorry, I cannot fetch a joke right now.")
+
+# ---------------------- Voice Command Listener ----------------------
+def listen_command(duration=5):
+    recognizer = sr.Recognizer()
+    try:
+        with sr.Microphone() as source:
+            recognizer.adjust_for_ambient_noise(source, duration=1.5)
+            print("🎤 Listening...")
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=duration)
+        command = recognizer.recognize_google(audio).lower()
+        print(f"✅ Command received: {command}")
+        return command
+    except sr.UnknownValueError:
+        return ""
+    except sr.RequestError:
+        speak("Speech service is not available.")
+        return ""
+    except Exception as e:
+        print(f"Recording error: {e}")
+        return ""
+
+# ---------------------- Date & Time ----------------------
+def speak_date_time():
+    now = datetime.now()
+    speak(f"Today is {now.strftime('%A, %d %B %Y')} and the time is {now.strftime('%H:%M:%S')}")
+
+# ---------------------- Weather ----------------------
+def speak_weather(city, api_key):
+    try:
+        city_encoded = quote(city)
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city_encoded}&appid={api_key}&units=metric"
+        response = requests.get(url).json()
+        if response.get("main"):
+            temp = response['main']['temp']
+            description = response['weather'][0]['description']
+            speak(f"The temperature in {city.title()} is {temp}°C with {description}")
+        else:
+            speak(f"Sorry, I couldn't fetch weather for {city.title()}")
+    except Exception as e:
+        print(f"Weather Error: {e}")
+        speak("Weather service is not available right now.")
+
+# ---------------------- Main Loop ----------------------
+if __name__ == "__main__":
+    WEATHER_API_KEY = "eeddbf651f3dc07b4bea92e116270823"
+
+    speak("Good evening Aman! My name is lush.")
+    active = False
+
+    while True:
+        if not active:
+            command = listen_command(duration=3)
+            if "hello lush" in command:
+                speak("Hello! What can I do for you?")
+                active = True
+            else:
+                continue
+
+        command = listen_command()
+        if not command:
+            time.sleep(1)
+            continue
+
+        # ---------------------- Commands ----------------------
+        if "time" in command or "date" in command:
+            speak_date_time()
+
+        elif "weather" in command:
+            speak("Which city do you want the weather for?")
+            city = listen_command()
+            if city:
+                speak_weather(city, WEATHER_API_KEY)
+            else:
+                speak("I didn’t catch the city name.")
+
+        elif "joke" in command:
+            tell_joke()
+
+        elif "youtube" in command and "music" in command:
+            song_name = command.replace("play youtube", "").replace("music", "").strip()
+            if song_name:
+                play_youtube_music(song_name)
+            else:
+                speak("Please say the name of the song after saying play youtube music.")
+
+        elif "pause music" in command:
+            pause_youtube_music()
+
+        elif "resume music" in command:
+            resume_youtube_music()
+
+        elif "stop music" in command:
+            stop_youtube_music()
+
+        elif "increase volume" in command:
+            increase_volume()
+
+        elif "decrease volume" in command:
+            decrease_volume()
+
+        elif "change voice to female" in command:
+            if set_voice("female"):
+                speak("Voice changed to female.")
+            else:
+                speak("Sorry, I couldn’t find a female voice.")
+
+        elif "change voice to male" in command:
+            if set_voice("male"):
+                speak("Voice changed to male.")
+            else:
+                speak("Sorry, I couldn’t find a male voice.")
+
+        elif "google" in command or "ask google" in command:
+            query = command.replace("ask google", "").replace("google", "").strip()
+            if query:
+                ask_google(query)
+            else:
+                speak("What do you want me to ask Google?")
+
+        elif "stop" in command or "exit" in command:
+            speak("Goodbye! Have a nice day.")
+            stop_youtube_music()
+            break
+
+        else:
+            speak("I can help you with time, weather, music, jokes, or you can ask Google for more.")
